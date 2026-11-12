@@ -4,6 +4,7 @@ Builds a Word (.docx) 'Cahier des Charges' for the Wire Harness Routing & Genera
 No external libraries required: a .docx is a ZIP of OOXML parts, which we assemble by hand.
 """
 import zipfile
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,9 @@ body.append(para(
 body.append(para([run("Objectif principal : ", bold=True),
                   run("transformer une sélection simple de l'utilisateur (choix d'un point de "
                       "fixation) en une géométrie de faisceau générée de façon déterministe, "
-                      "rapide, répétable et fiable.")]))
+                      "rapide, répétable et fiable, puis valider obligatoirement son absence "
+                      "de collision ou d'interférence avec le périmètre d'obstacles sélectionné, "
+                      "en tenant compte de la marge de dégagement.")]))
 body.append(para([run("Principe directeur : ", bold=True),
                   run("la géométrie est calculée par un moteur déterministe (pas par une IA). "
                       "L'IA, si elle est utilisée, sert uniquement d'interface en langage "
@@ -163,8 +166,11 @@ body.append(heading("2.1 Inclus dans le périmètre", 2))
 for t in [
     "Lecture des références existantes (connecteurs de départ/arrivée, points de fixation).",
     "Sélection par l'utilisateur du point de fixation à emprunter (F1 ou F2).",
+    "Lecture ou sélection d'un périmètre d'obstacles depuis une source configurable du modèle CAO.",
     "Calcul déterministe du tracé A → fixation choisie → B.",
     "Génération de la géométrie du faisceau (courbe / spline puis balayage de section).",
+    "Contrôle obligatoire de collision et de proximité entre le faisceau et les obstacles, avec une marge de dégagement configurable.",
+    "Restitution du statut du contrôle et des obstacles concernés.",
     "Régénération propre du tracé en cas de changement de sélection (sans doublons).",
     "Contrôle que le tracé passe effectivement par le point de fixation (tolérance ε).",
 ]:
@@ -172,7 +178,7 @@ for t in [
 body.append(heading("2.2 Hors périmètre (version 1)", 2))
 for t in [
     "Connectivité électrique (schéma, affectation des fils, continuité électrique).",
-    "Évitement d'obstacles complexe (sauf si requis — voir §8.5).",
+    "Contournement automatique complexe et recalcul automatique du trajet autour des obstacles.",
     "Génération de la planche de fabrication 2D à plat (formboard) — phase ultérieure.",
     "Gestion multi-faisceaux et branches multiples complexes — phase ultérieure.",
 ]:
@@ -188,7 +194,10 @@ body.append(table([
     [("Ligne médiane (centerline)", False, None), ("Courbe centrale du faisceau servant de guide au balayage.", False, None)],
     [("Diamètre de faisceau", False, None), ("Épaisseur du faisceau (section balayée le long du tracé).", False, None)],
     [("Rayon de courbure min.", False, None), ("Rayon minimal admissible dans un virage du faisceau.", False, None)],
-    [("Tolérance ε", False, None), ("Écart maximal admis entre le tracé et le point de fixation.", False, None)],
+    [("Tolérance ε", False, None), ("Écart maximal admis entre le tracé et le point de fixation ou seuil numérique utilisé par le contrôle.", False, None)],
+    [("Obstacle", False, None), ("Géométrie du modèle appartenant au périmètre configurable ou sélectionné contre lequel le faisceau est contrôlé.", False, None)],
+    [("Collision / interférence", False, None), ("Intersection du volume enveloppe du faisceau avec un obstacle, y compris une violation de la marge de dégagement demandée.", False, None)],
+    [("Marge de dégagement", False, None), ("Distance minimale configurable à conserver entre la surface du faisceau et les obstacles ; elle est positive ou nulle.", False, None)],
     [("Set géométrique dédié", False, None), ("Ensemble (ex. AI_HARNESS_GENERATED) regroupant la géométrie générée.", False, None)],
 ], widths=[3200, 6300]))
 
@@ -197,14 +206,18 @@ body.append(heading("4. Description fonctionnelle du besoin", 1))
 body.append(para(
     "Le modèle CAO contient quatre objets de référence déjà positionnés : un connecteur de "
     "départ A, deux points de fixation possibles F1 et F2, et un connecteur d'arrivée B. "
-    "L'utilisateur choisit le point de fixation à emprunter. L'outil calcule alors le tracé "
-    "A → fixation choisie → B puis génère la géométrie correspondante."))
+    "Il fournit également un périmètre d'obstacles issu d'une source configurable ou d'une "
+    "sélection explicite de l'utilisateur. L'utilisateur choisit le point de fixation à "
+    "emprunter. L'outil calcule alors le tracé A → fixation choisie → B, génère une géométrie "
+    "candidate, puis contrôle obligatoirement son enveloppe contre les obstacles avant de "
+    "valider la génération."))
 body.append(table([
     [("Référence", False, None), ("Rôle", False, None), ("Donnée requise", False, None)],
     [("Départ A", False, None), ("Début du faisceau", False, None), ("Position (+ direction de sortie)", False, None)],
     [("Fixation F1", False, None), ("Point de passage possible", False, None), ("Position (+ orientation si clip)", False, None)],
     [("Fixation F2", False, None), ("Point de passage alternatif", False, None), ("Position (+ orientation si clip)", False, None)],
     [("Arrivée B", False, None), ("Fin du faisceau", False, None), ("Position (+ direction d'approche)", False, None)],
+    [("Obstacles", False, None), ("Périmètre du contrôle collision/proximité", False, None), ("Source configurable ou sélectionnée dans le modèle", False, None)],
 ], widths=[2200, 4000, 3300]))
 
 # ---- 5. Exigences fonctionnelles ----
@@ -220,6 +233,11 @@ reqs = [
     ("EF-08", "Les références d'origine (connecteurs, fixations, pièces) ne doivent jamais être modifiées."),
     ("EF-09", "En cas de référence manquante ou de tracé impossible, un message d'erreur clair doit être affiché."),
     ("EF-10", "La longueur totale du tracé doit être calculée et restituée."),
+    ("EF-11", "L'outil doit acquérir le périmètre d'obstacles depuis la source configurée ou la sélection utilisateur et identifier les géométries contrôlées."),
+    ("EF-12", "Le contrôle d'obstacles doit être exécuté obligatoirement sur chaque géométrie candidate avant tout statut de génération réussi."),
+    ("EF-13", "Le contrôle doit utiliser le volume enveloppe de la centerline, de rayon égal au diamètre du faisceau divisé par deux augmenté de la marge de dégagement."),
+    ("EF-14", "L'outil doit restituer un rapport structuré avec le statut du contrôle, les obstacles concernés et, si disponibles, la localisation ou zone et la distance minimale."),
+    ("EF-15", "Une collision ou un échec du contrôle doit bloquer la génération et ne doit jamais produire un faux succès ; une prévisualisation de la centerline peut être conservée uniquement si elle est clairement marquée invalide."),
 ]
 body.append(table(
     [[("ID", False, None), ("Exigence", False, None)]] +
@@ -234,6 +252,10 @@ for t in [
     "Création de géométrie via HybridShapeFactory (spline, balayage circulaire) — à vérifier selon la version/licence installée.",
     "Système d'exploitation : Windows (requis pour l'automatisation COM de CATIA V5).",
     "Correspondance de l'architecture 32/64 bits entre Python et CATIA si automatisation Python.",
+    "Entrées du contrôle : centerline candidate, diamètre strictement positif, marge de dégagement positive ou nulle, tolérance numérique configurable et périmètre d'obstacles résolu.",
+    "Volume de contrôle : enveloppe de la centerline avec un rayon égal à diamètre / 2 + marge de dégagement.",
+    "Sortie du contrôle : statut CLEAR, COLLISION ou CHECK_FAILED, obstacles concernés et informations de localisation et de distance minimale lorsqu'elles sont disponibles.",
+    "La méthode d'interférence et les géométries acceptées doivent être compatibles avec la version, la licence et le type de document CATIA utilisés.",
 ]:
     body.append(bullet(t))
 
@@ -242,9 +264,9 @@ body.append(heading("7. Architecture logicielle proposée", 1))
 body.append(para("L'architecture sépare clairement trois responsabilités :"))
 body.append(table([
     [("Couche", False, None), ("Rôle", False, None), ("Technologie", False, None)],
-    [("Interface", False, None), ("Sélection F1/F2, saisie du diamètre, bouton Générer", False, None), ("Dialogue macro / app externe", False, None)],
-    [("Moteur de routage", False, None), ("Calcul déterministe du tracé, contrôles, longueur", False, None), ("CATScript / VBA / Python", False, None)],
-    [("Automatisation CAO", False, None), ("Création / mise à jour de la géométrie dans CATIA", False, None), ("API CATIA (COM)", False, None)],
+    [("Interface", False, None), ("Sélection F1/F2, périmètre d'obstacles, diamètre, marge et bouton Générer", False, None), ("Dialogue macro / app externe", False, None)],
+    [("Moteur de routage", False, None), ("Calcul du tracé candidat, contrôle obligatoire après calcul/génération candidate et avant validation, statut et longueur", False, None), ("CATScript / VBA / Python", False, None)],
+    [("Automatisation CAO", False, None), ("Fourniture des géométries obstacles, création/mise à jour de la géométrie et matérialisation du résultat du contrôle", False, None), ("API CATIA (COM)", False, None)],
     [("IA (optionnel)", False, None), ("Traduction langage naturel → paramètres JSON validés", False, None), ("Service LLM externe", False, None)],
 ], widths=[2400, 4600, 2500]))
 body.append(para([run("Règle d'architecture : ", bold=True),
@@ -273,13 +295,23 @@ body.append(heading("8.4 Contrainte de passage par la fixation", 2))
 body.append(para("Vérifier explicitement que le tracé passe par la fixation : "
                  "||C(t_F) − F|| ≤ ε (ex. ε = 0,1 mm selon le besoin réel)."))
 body.append(heading("8.5 Contraintes connecteur et obstacles", 2))
+body.append(para([run("Détection V1 obligatoire : ", bold=True),
+                  run("après le calcul et la génération de la centerline candidate, et avant "
+                      "toute validation, contrôler contre le périmètre d'obstacles le volume "
+                      "enveloppe obtenu avec le rayon diamètre / 2 + marge de dégagement.")]))
 for t in [
-    "Direction de sortie du connecteur + distance de dégagement.",
-    "Rayon de courbure minimal du faisceau.",
-    "Évitement d'obstacles (optionnel V1) : zones interdites / enveloppes de dégagement.",
-    "Si plusieurs fixations/branches ou obstacles : revenir à un routage par graphe (Dijkstra / A*).",
+    "Direction de sortie du connecteur, distance de dégagement et rayon de courbure minimal du faisceau.",
+    "CLEAR : contrôle exécuté avec succès et aucune collision ni violation de marge détectée.",
+    "COLLISION : au moins un obstacle intersecte le volume de contrôle ou viole la marge ; la génération est bloquée.",
+    "CHECK_FAILED : contrôle non exécutable ou résultat non fiable ; la génération est bloquée et cet état ne doit jamais être traité comme CLEAR.",
+    "Le résultat identifie le ou les obstacles concernés et fournit la localisation ou zone et la distance minimale lorsqu'elles sont disponibles.",
+    "Une centerline candidate peut rester visible à titre de prévisualisation seulement si elle est explicitement marquée invalide.",
 ]:
     body.append(bullet(t))
+body.append(para([run("Évitement futur : ", bold=True),
+                  run("le contournement automatique et le recalcul du trajet sont hors V1. "
+                      "Dijkstra ou A* ne s'appliquent qu'à cette évolution future, notamment "
+                      "pour plusieurs fixations, branches ou chemins autour des obstacles.")]))
 
 # ---- 9. IA ----
 body.append(heading("9. Rôle (optionnel) de l'IA", 1))
@@ -291,9 +323,11 @@ body.append(para([run('{ "operation": "generate_harness", "start_reference": "ST
                       '"clearance_mm": null, "require_obstacle_check": true }',
                       italic=True, size=18, color="404040")]))
 for t in [
+    "En V1, require_obstacle_check doit obligatoirement valoir true et ne peut pas désactiver le contrôle.",
+    "clearance_mm doit être supérieur ou égal à 0 ; toute valeur absente, y compris null, est demandée à l'utilisateur ou lue dans la configuration.",
     "Ne jamais inventer de coordonnées, dimensions ou exigences d'ingénierie.",
-    "null = valeur non fournie → l'application la demande ou la lit dans la configuration.",
     "La sortie JSON doit être validée par un schéma strict avant toute opération CATIA.",
+    "Le moteur restitue un résultat structuré contenant le statut CLEAR, COLLISION ou CHECK_FAILED, les obstacles concernés et les détails disponibles.",
     "Ne jamais affirmer qu'un tracé est sans collision tant que le moteur ne l'a pas vérifié.",
 ]:
     body.append(bullet(t))
@@ -303,10 +337,12 @@ body.append(heading("10. Interface utilisateur", 1))
 for t in [
     "Affichage des connecteurs de départ et d'arrivée (lecture seule).",
     "Sélecteur de fixation : Fixation 1 / Fixation 2.",
+    "Sélection ou affichage de la source configurable définissant le périmètre d'obstacles.",
     "Champ diamètre (ex. 10 mm) avec valeurs prédéfinies possibles.",
+    "Champ marge de dégagement en millimètres, avec validation d'une valeur positive ou nulle.",
     "Bouton « Générer » et « Régénérer ».",
-    "Zone de messages (succès / avertissement / erreur).",
-    "Évolutions futures : détection auto des références, aperçu du tracé, réglage du rayon de courbure.",
+    "Zone de messages indiquant le statut CLEAR, COLLISION ou CHECK_FAILED et la liste des collisions ou obstacles concernés.",
+    "Évolutions futures : détection auto des références, aperçu enrichi du tracé, réglage du rayon de courbure et contournement automatique.",
 ]:
     body.append(bullet(t))
 
@@ -314,12 +350,12 @@ for t in [
 body.append(heading("11. Exigences non fonctionnelles", 1))
 body.append(table([
     [("Catégorie", False, None), ("Exigence", False, None)],
-    [("Fiabilité", False, None), ("Résultat identique et répétable pour une même entrée.", False, None)],
-    [("Performance", False, None), ("Génération quasi instantanée pour un tracé simple.", False, None)],
-    [("Robustesse", False, None), ("Gestion propre des erreurs (références manquantes, tracé impossible).", False, None)],
+    [("Fiabilité", False, None), ("Résultat identique et répétable pour une même entrée ; aucune collision et aucun échec de contrôle ne produit un statut de succès.", False, None)],
+    [("Performance", False, None), ("Temps du contrôle mesuré et suivi selon la taille et la complexité de l'assemblage ; l'objectif chiffré sera fixé après mesures représentatives.", False, None)],
+    [("Robustesse", False, None), ("Comportement fail-closed : toute donnée obstacle invalide, erreur ou indisponibilité du contrôle produit CHECK_FAILED et bloque la génération.", False, None)],
     [("Maintenabilité", False, None), ("Géométrie générée isolée dans un set dédié, facilement supprimable.", False, None)],
     [("Sécurité des données", False, None), ("Vérifier la politique interne avant tout envoi de données CAO à un service IA externe.", False, None)],
-    [("Traçabilité", False, None), ("Journalisation des erreurs et des générations.", False, None)],
+    [("Traçabilité", False, None), ("Journalisation des entrées du contrôle, du périmètre d'obstacles, de la tolérance, du statut, des obstacles concernés et des erreurs.", False, None)],
 ], widths=[2600, 6900]))
 
 # ---- 12. Phases ----
@@ -327,7 +363,7 @@ body.append(heading("12. Phases de développement", 1))
 phases = [
     ("Phase 1", "Comprendre le test", "Identifier A, F1, F2, B, leurs repères, le diamètre et la forme attendue."),
     ("Phase 2", "Prouver la géométrie", "Macro générant un tracé via F1 et un via F2, passant bien par la fixation."),
-    ("Phase 3", "Améliorer le routage", "Transitions lissées, direction de sortie, rayon de courbure, collisions."),
+    ("Phase 3", "Valider le routage V1", "Transitions lissées, direction de sortie, rayon de courbure et détection obligatoire des collisions avant validation."),
     ("Phase 4", "Ajouter l'interface", "Sélection F1/F2 + Générer ; remplacement propre de la géométrie."),
     ("Phase 5", "Ajouter l'IA", "Prompt → paramètres JSON validés avant appel du moteur."),
     ("Phase 6", "Industrialiser", "Tests multi-assemblages, gestion d'erreurs, déploiement contrôlé."),
@@ -336,6 +372,9 @@ body.append(table(
     [[("Phase", False, None), ("Intitulé", False, None), ("Livrable / contenu", False, None)]] +
     [[(p, False, None), (n, False, None), (d, False, None)] for p, n, d in phases],
     widths=[1300, 2600, 5600]))
+body.append(para([run("Portée des phases : ", bold=True),
+                  run("la Phase 3 et sa détection de collisions sont obligatoires pour la V1. "
+                      "L'évitement et le recalcul automatique de trajet restent une évolution future.")]))
 
 # ---- 13. Tests ----
 body.append(heading("13. Plan de tests et critères d'acceptation", 1))
@@ -345,11 +384,17 @@ tests = [
     ("Générer deux fois", "Aucune géométrie en doublon"),
     ("Connecteur de départ manquant", "Erreur claire, aucun modèle invalide"),
     ("Fixation manquante", "Génération bloquée"),
-    ("Tracé impossible", "Erreur signalée (pas de faux succès)"),
-    ("Déplacement d'un connecteur", "Le tracé se met à jour correctement"),
-    ("Tracé coupant une pièce", "Collision signalée si contrôle activé"),
+    ("Tracé impossible", "Erreur signalée, pas de faux succès"),
+    ("Déplacement d'un connecteur", "Le tracé se met à jour et le contrôle est rejoué"),
+    ("Périmètre valide sans obstacle", "Statut CLEAR après exécution effective du contrôle"),
+    ("Collision directe avec un obstacle", "Statut COLLISION, obstacle identifié et génération bloquée"),
+    ("Obstacle hors faisceau mais dans la marge", "Statut COLLISION pour violation de la marge de dégagement"),
+    ("Plusieurs obstacles en collision", "Statut COLLISION et liste de tous les obstacles détectés"),
+    ("Liste d'obstacles requise vide ou jeu invalide", "Statut CHECK_FAILED et génération bloquée"),
+    ("Erreur interne ou indisponibilité du contrôle", "Statut CHECK_FAILED, jamais CLEAR, et génération bloquée"),
+    ("Distance proche du seuil de tolérance", "Classement stable et conforme à la tolérance numérique configurée"),
     ("JSON IA invalide", "Données rejetées avant opérations CATIA"),
-    ("Réouverture du CATPart", "Résultat attendu préservé"),
+    ("Réouverture du CATPart", "Résultat attendu et statut du contrôle préservés"),
 ]
 body.append(table(
     [[("Test", False, None), ("Résultat attendu", False, None)]] +
@@ -357,17 +402,20 @@ body.append(table(
     widths=[4200, 5300]))
 body.append(para([run("Critères minimaux de livraison V1 : ", bold=True),
                   run("sélection correcte de la fixation, extrémités correctes, génération "
-                      "stable et régénération propre.")]))
+                      "stable, régénération propre, détection fiable des collisions et violations "
+                      "de marge, blocage en cas de COLLISION ou CHECK_FAILED, et absence de tout "
+                      "statut CLEAR mensonger.")]))
 
 # ---- 14. Livrables ----
 body.append(heading("14. Livrables", 1))
 for t in [
-    "Spécification des entrées/sorties du test (Phase 1).",
+    "Spécification des entrées/sorties du routage et du contrôle d'obstacles (Phase 1).",
     "Macro CATIA de génération du tracé (Phase 2).",
-    "Moteur de routage amélioré avec règles d'ingénierie (Phase 3).",
+    "Moteur de routage amélioré avec détection obligatoire et rapport structuré de collision (Phase 3).",
+    "Spécification du rapport de collision : statuts, obstacles, localisation/zone et distance minimale disponibles.",
     "Interface utilisateur de sélection et génération (Phase 4).",
     "Couche IA optionnelle + schéma JSON de validation (Phase 5).",
-    "Documentation d'utilisation et jeu de tests (Phase 6).",
+    "Documentation d'utilisation et jeu de cas obstacle couvrant les critères d'acceptation (Phase 6).",
 ]:
     body.append(bullet(t))
 
@@ -376,15 +424,17 @@ body.append(heading("15. Hypothèses, contraintes et risques", 1))
 body.append(heading("15.1 Hypothèses", 2))
 for t in [
     "Les quatre références sont déjà présentes et correctement positionnées dans le modèle.",
-    "Pour la V1, les deux tracés possibles sont supposés valides (sans collision).",
+    "Le périmètre d'obstacles est défini par une source configurée ou une sélection explicite, accessible et non ambiguë avant le contrôle.",
     "Le poste dispose de la licence Generative Shape Design.",
 ]:
     body.append(bullet(t))
 body.append(heading("15.2 Risques", 2))
 for t in [
-    "Les API HybridShapeFactory varient selon la version/licence de CATIA.",
+    "Les API HybridShapeFactory et de contrôle d'interférence varient selon la version/licence de CATIA.",
     "L'automatisation COM dépend de Windows et de la correspondance 32/64 bits.",
     "Une spline peut « manquer » le point de fixation → contrôle ε obligatoire.",
+    "Les assemblages volumineux ou les géométries d'obstacles complexes peuvent dégrader les performances du contrôle.",
+    "Des géométries complexes, simplifiées ou défectueuses et des tolérances mal réglées peuvent produire des faux positifs ou des faux négatifs.",
     "L'envoi de données CAO à une IA externe peut poser un problème de confidentialité.",
 ]:
     body.append(bullet(t))
@@ -393,10 +443,14 @@ for t in [
 body.append(heading("16. Questions ouvertes à clarifier", 1))
 for t in [
     "Type de fixation : point de passage obligatoire 3D OU clip physique (avec orientation) ?",
-    "Complexité du tracé : simple A → F → B lissé OU évitement d'obstacles requis ?",
+    "Quelle source exacte définit le périmètre d'obstacles : sélection utilisateur, produit, sous-assemblage, liste configurée ou règle d'exclusion ?",
+    "Quelle politique appliquer à une centerline en collision : suppression immédiate ou conservation comme prévisualisation explicitement invalide ?",
+    "Quelles valeurs et unités de marge de dégagement et de tolérance numérique faut-il configurer par défaut ?",
+    "Quelles géométries simplifiées sont acceptables pour le contrôle, et selon quelles règles de fidélité ?",
     "Environnement : macro intégrée à CATIA V5 OU prototype moteur autonome (Python) d'abord ?",
     "Accès CATIA : assemblage disponible et licence Generative Shape Design présente ?",
     "Ordre des fixations imposé, ou le système doit-il choisir le meilleur ordre (si plusieurs) ?",
+    "Évolution future : quelles règles et priorités devront guider le contournement automatique des obstacles ?",
 ]:
     body.append(bullet(t))
 
@@ -485,7 +539,7 @@ numbering_xml = (
 # ---------------------------------------------------------------------------
 # Write the .docx (zip)
 # ---------------------------------------------------------------------------
-out = "/projects/sandbox/Cahier_des_Charges_Faisceau_Routing.docx"
+out = Path(__file__).resolve().parent / "Cahier_des_Charges_Faisceau_Routing.docx"
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("[Content_Types].xml", content_types)
     z.writestr("_rels/.rels", root_rels)
