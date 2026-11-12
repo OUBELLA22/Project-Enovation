@@ -17,3 +17,7 @@ python3 build_as_is_spec.py
 ```
 
 Both generated DOCX files are written directly into this repository. Version 1 covers mandatory obstacle and collision detection, but not automatic obstacle avoidance or route recalculation.
+
+## Process Flowchart
+
+![Automatic Wire Harness Routing and Generation process](docs/images/Wire_Harness_Routing_Process_Flow.png)
